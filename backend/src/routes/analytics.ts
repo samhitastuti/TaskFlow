@@ -3,6 +3,8 @@ import prisma from '../lib/prisma';
 import redis from '../lib/redis';
 import { TaskStatus } from '@prisma/client';
 
+const MAX_STREAK_DAYS = 365;
+
 export async function analyticsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', async (req) => {
     await req.jwtVerify();
@@ -89,7 +91,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
     let streakDays = 0;
     const cursor = new Date(now);
     cursor.setHours(0, 0, 0, 0);
-    while (streakDays < 365) {
+    while (streakDays < MAX_STREAK_DAYS) {
       const dateKey = cursor.toISOString().split('T')[0];
       if (!completionDays.has(dateKey)) break;
       streakDays++;

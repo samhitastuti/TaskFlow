@@ -116,7 +116,7 @@ export async function userRoutes(app: FastifyInstance) {
       }
       if (count > 1) {
         return reply.status(429).send({
-          type: 'https://taskflow.com/probs/rate-limited',
+          type: 'https://taskflow.com/problems/rate-limited',
           title: 'Too Many Requests',
           status: 429,
           detail: 'Data export is limited to once per 24 hours.',
