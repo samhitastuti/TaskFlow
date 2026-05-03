@@ -1,37 +1,15 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import { taskSchema, updateTaskSchema, bulkSyncSchema } from '../schemas/tasks';
-import { calculateScore, generateSchedule } from '../services/scheduler';
-import { TaskStatus, ActionType, Recurrence } from '@prisma/client';
+import { calculateScore, generateSchedule, UserPreferences } from '../services/scheduler';
+import { updateTaskScore } from '../services/scoring';
+import { TaskStatus, ActionType, Recurrence, User } from '@prisma/client';
 
-async function updateTaskScore(taskId: string, userId: string) {
-  const [task, user] = await Promise.all([
-    prisma.task.findUnique({ where: { id: taskId } }),
-    prisma.user.findUnique({ where: { id: userId } }),
-  ]);
+type ScoringUser = Pick<User, 'scoring_weight_urgency' | 'scoring_weight_priority' | 'scoring_weight_duration'>;
+type ScorableTask = { composite_score: number | null; priority_weight: number; deadline: Date; duration_minutes: number; skip_count: number };
 
-  if (!task || !user) return null;
-
-  const breakdown = calculateScore(task as any, user as any);
-
-  await prisma.$transaction([
-    prisma.task.update({
-      where: { id: taskId },
-      data: { composite_score: breakdown.score },
-    }),
-    prisma.scoreSnapshot.create({
-      data: {
-        task_id: taskId,
-        user_id: userId,
-        score: breakdown.score,
-        urgency_component: breakdown.urgency_component,
-        priority_component: breakdown.priority_component,
-        duration_component: breakdown.duration_component,
-      },
-    }),
-  ]);
-
-  return breakdown;
+function buildScoreBreakdown(task: ScorableTask, user: ScoringUser) {
+  return calculateScore(task as any, user as UserPreferences);
 }
 
 async function getUpdatedQueue(userId: string) {
@@ -41,10 +19,6 @@ async function getUpdatedQueue(userId: string) {
   ]);
   if (!user) return null;
   return generateSchedule(tasks as any, user as any);
-}
-
-function buildScoreBreakdown(task: { composite_score: number | null; priority_weight: number; deadline: Date; duration_minutes: number }, user: { scoring_weight_urgency: number; scoring_weight_priority: number; scoring_weight_duration: number }) {
-  return calculateScore(task as any, user as any);
 }
 
 export async function taskRoutes(app: FastifyInstance) {
@@ -173,11 +147,12 @@ export async function taskRoutes(app: FastifyInstance) {
     if (!task) return reply.status(404).send({ message: 'Task not found' });
     if (!user) return reply.status(404).send({ message: 'User not found' });
 
-    // Resolve dependency task objects
+    // Resolve dependency task objects — only returns tasks owned by this user
+    // (userId filter ensures no cross-user data leakage)
     let dependency_tasks: any[] = [];
     if (task.dependencies.length > 0) {
       dependency_tasks = await prisma.task.findMany({
-        where: { id: { in: task.dependencies }, user_id: userId },
+        where: { id: { in: task.dependencies }, user_id: userId, deleted_at: null },
       });
     }
 

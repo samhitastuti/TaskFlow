@@ -3,17 +3,7 @@ import prisma from '../lib/prisma';
 import redis from '../lib/redis';
 import { bulkSyncSchema } from '../schemas/tasks';
 import { TaskStatus } from '@prisma/client';
-import { calculateScore } from '../services/scheduler';
-
-async function updateTaskScore(taskId: string, userId: string) {
-  const [task, user] = await Promise.all([
-    prisma.task.findUnique({ where: { id: taskId } }),
-    prisma.user.findUnique({ where: { id: userId } }),
-  ]);
-  if (!task || !user) return;
-  const breakdown = calculateScore(task as any, user as any);
-  await prisma.task.update({ where: { id: taskId }, data: { composite_score: breakdown.score } });
-}
+import { updateTaskScore } from '../services/scoring';
 
 export async function syncRoutes(app: FastifyInstance) {
   app.addHook('preHandler', async (req) => {

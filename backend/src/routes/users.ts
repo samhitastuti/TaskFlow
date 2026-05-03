@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import redis from '../lib/redis';
-import { generateSchedule } from '../services/scheduler';
+import { calculateScore } from '../services/scheduler';
 import { z } from 'zod';
 import { taskSchema } from '../schemas/tasks';
 
@@ -78,10 +78,9 @@ export async function userRoutes(app: FastifyInstance) {
       const tasks = await prisma.task.findMany({
         where: { user_id: userId, deleted_at: null },
       });
-      const { calculateScore } = await import('../services/scheduler');
       await Promise.all(
         tasks.map(async (task) => {
-          const breakdown = calculateScore(task as any, user as any);
+          const breakdown = calculateScore(task as any, user);
           await prisma.task.update({
             where: { id: task.id },
             data: { composite_score: breakdown.score },

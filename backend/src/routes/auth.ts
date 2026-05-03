@@ -7,6 +7,9 @@ import { loginSchema, registerSchema } from '../schemas/auth';
 
 const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
+// Per-IP auth rate limit: 10 requests per 15 minutes
+const AUTH_RATE_LIMIT = { max: 10, timeWindow: '15 minutes' };
+
 function refreshFamilyKey(fid: string) {
   return `refresh_family:${fid}`;
 }
@@ -24,27 +27,7 @@ async function issueTokens(app: FastifyInstance, userId: string) {
 }
 
 export async function authRoutes(app: FastifyInstance) {
-  // Per-IP rate limit for auth endpoints (10 req / 15 min)
-  app.addHook('onRequest', async (req, reply) => {
-    if (process.env.NODE_ENV === 'test') return;
-    const ip = req.ip;
-    const key = `rate_limit:auth:${ip}`;
-    const count = await redis.incr(key);
-    if (count === 1) {
-      await redis.expire(key, 15 * 60);
-    }
-    if (count > 10) {
-      return reply.status(429).send({
-        type: 'https://taskflow.com/probs/rate-limited',
-        title: 'Too Many Requests',
-        status: 429,
-        detail: 'Too many auth attempts. Please wait before trying again.',
-        instance: req.url,
-      });
-    }
-  });
-
-  app.post('/register', async (req, reply) => {
+  app.post('/register', { config: { rateLimit: AUTH_RATE_LIMIT } }, async (req, reply) => {
     const data = registerSchema.parse(req.body);
 
     const existingUser = await prisma.user.findUnique({
@@ -87,7 +70,7 @@ export async function authRoutes(app: FastifyInstance) {
       });
   });
 
-  app.post('/login', async (req, reply) => {
+  app.post('/login', { config: { rateLimit: AUTH_RATE_LIMIT } }, async (req, reply) => {
     const { email, password } = loginSchema.parse(req.body);
 
     const user = await prisma.user.findUnique({ where: { email } });
@@ -123,7 +106,7 @@ export async function authRoutes(app: FastifyInstance) {
       });
   });
 
-  app.post('/refresh', async (req, reply) => {
+  app.post('/refresh', { config: { rateLimit: AUTH_RATE_LIMIT } }, async (req, reply) => {
     const rawToken = req.cookies.refreshToken;
     if (!rawToken) {
       return reply.status(401).send({ message: 'No refresh token' });
@@ -144,13 +127,13 @@ export async function authRoutes(app: FastifyInstance) {
     const storedJti = await redis.get(refreshFamilyKey(fid));
 
     if (!storedJti) {
-      // Family already invalidated (logged out)
       return reply.status(401).send({ message: 'Refresh token has been revoked' });
     }
 
     if (storedJti !== jti) {
-      // Reuse detected — invalidate entire family
+      // Reuse detected — invalidate entire family and log security event
       await redis.del(refreshFamilyKey(fid));
+      req.log.warn({ userId, fid }, 'Refresh token reuse detected — family invalidated');
       return reply.status(401).send({ message: 'Refresh token reuse detected. Please log in again.' });
     }
 
@@ -187,7 +170,7 @@ export async function authRoutes(app: FastifyInstance) {
     reply.clearCookie('refreshToken').send({ message: 'Logged out' });
   });
 
-  app.get('/me', async (req, reply) => {
+  app.get('/me', { config: { rateLimit: AUTH_RATE_LIMIT } }, async (req, reply) => {
     await req.jwtVerify();
     const user = await prisma.user.findUnique({
       where: { id: (req.user as any).sub },

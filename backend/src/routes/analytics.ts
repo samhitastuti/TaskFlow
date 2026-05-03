@@ -79,7 +79,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
         ? Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0][0]
         : 'work';
 
-    // Current streak (consecutive days with at least one completion)
+    // Current streak (consecutive days with at least one completion, capped at 365)
     const completionDays = new Set(
       allTasks
         .filter((t) => t.completed_at)
@@ -89,7 +89,7 @@ export async function analyticsRoutes(app: FastifyInstance) {
     let streakDays = 0;
     const cursor = new Date(now);
     cursor.setHours(0, 0, 0, 0);
-    while (true) {
+    while (streakDays < 365) {
       const dateKey = cursor.toISOString().split('T')[0];
       if (!completionDays.has(dateKey)) break;
       streakDays++;
