@@ -140,18 +140,58 @@ export async function sessionRoutes(app: FastifyInstance) {
     reply.send({ data: updated });
   });
 
+  app.post('/:id/abandon', async (req, reply) => {
+    const userId = (req.user as any).sub;
+    const { id } = req.params as any;
+
+    const session = await prisma.session.findFirst({
+      where: { id, user_id: userId },
+    });
+
+    if (!session) return reply.status(404).send({ message: 'Session not found' });
+
+    const updated = await prisma.session.update({
+      where: { id },
+      data: { status: SessionStatus.abandoned },
+    });
+
+    // Revert task back to pending
+    await prisma.task.update({
+      where: { id: session.task_id },
+      data: { status: TaskStatus.pending },
+    });
+
+    await prisma.actionLog.create({
+      data: {
+        user_id: userId,
+        task_id: session.task_id,
+        action: ActionType.session_ended,
+        payload: { session_id: session.id, abandoned: true } as any,
+      },
+    });
+
+    reply.send({ data: updated });
+  });
+
   app.get('/', async (req, reply) => {
     const userId = (req.user as any).sub;
-    const { task_id } = req.query as any;
+    const { task_id, limit, cursor } = req.query as any;
+    const pageSize = Math.min(parseInt(limit) || 20, 100);
 
     const sessions = await prisma.session.findMany({
       where: {
         user_id: userId,
-        ...(task_id && { task_id })
+        ...(task_id && { task_id }),
+        ...(cursor && { id: { gt: cursor } }),
       },
-      orderBy: { started_at: 'desc' }
+      orderBy: { started_at: 'desc' },
+      take: pageSize + 1,
     });
 
-    reply.send({ data: sessions });
+    const hasMore = sessions.length > pageSize;
+    const page = hasMore ? sessions.slice(0, pageSize) : sessions;
+    const nextCursor = hasMore ? page[page.length - 1].id : null;
+
+    reply.send({ data: page, meta: { cursor: nextCursor, has_more: hasMore } });
   });
 }

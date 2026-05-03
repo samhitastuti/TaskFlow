@@ -1,15 +1,54 @@
 import { FastifyInstance } from 'fastify';
 import bcrypt from 'bcrypt';
+import { randomUUID } from 'crypto';
 import prisma from '../lib/prisma';
+import redis from '../lib/redis';
 import { loginSchema, registerSchema } from '../schemas/auth';
-import { ZodError } from 'zod';
+
+const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
+
+function refreshFamilyKey(fid: string) {
+  return `refresh_family:${fid}`;
+}
+
+async function issueTokens(app: FastifyInstance, userId: string) {
+  const fid = randomUUID();
+  const jti = randomUUID();
+
+  const accessToken = app.jwt.sign({ sub: userId });
+  const refreshToken = app.jwt.sign({ sub: userId, fid, jti }, { expiresIn: '30d' });
+
+  await redis.setex(refreshFamilyKey(fid), REFRESH_TTL_SECONDS, jti);
+
+  return { accessToken, refreshToken };
+}
 
 export async function authRoutes(app: FastifyInstance) {
+  // Per-IP rate limit for auth endpoints (10 req / 15 min)
+  app.addHook('onRequest', async (req, reply) => {
+    if (process.env.NODE_ENV === 'test') return;
+    const ip = req.ip;
+    const key = `rate_limit:auth:${ip}`;
+    const count = await redis.incr(key);
+    if (count === 1) {
+      await redis.expire(key, 15 * 60);
+    }
+    if (count > 10) {
+      return reply.status(429).send({
+        type: 'https://taskflow.com/probs/rate-limited',
+        title: 'Too Many Requests',
+        status: 429,
+        detail: 'Too many auth attempts. Please wait before trying again.',
+        instance: req.url,
+      });
+    }
+  });
+
   app.post('/register', async (req, reply) => {
     const data = registerSchema.parse(req.body);
-    
+
     const existingUser = await prisma.user.findUnique({
-      where: { email: data.email }
+      where: { email: data.email },
     });
 
     if (existingUser) {
@@ -17,17 +56,16 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     const password_hash = await bcrypt.hash(data.password, 12);
-    
+
     const user = await prisma.user.create({
       data: {
         email: data.email,
         display_name: data.display_name,
         password_hash,
-      }
+      },
     });
 
-    const accessToken = app.jwt.sign({ sub: user.id });
-    const refreshToken = app.jwt.sign({ sub: user.id }, { expiresIn: '30d' });
+    const { accessToken, refreshToken } = await issueTokens(app, user.id);
 
     reply
       .setCookie('refreshToken', refreshToken, {
@@ -43,25 +81,27 @@ export async function authRoutes(app: FastifyInstance) {
             id: user.id,
             email: user.email,
             display_name: user.display_name,
-            onboarding_completed: user.onboarding_completed
-          }
-        }
+            onboarding_completed: user.onboarding_completed,
+          },
+        },
       });
   });
 
   app.post('/login', async (req, reply) => {
     const { email, password } = loginSchema.parse(req.body);
-    
-    const user = await prisma.user.findUnique({
-      where: { email }
-    });
+
+    const user = await prisma.user.findUnique({ where: { email } });
 
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
       return reply.status(401).send({ message: 'Invalid credentials' });
     }
 
-    const accessToken = app.jwt.sign({ sub: user.id });
-    const refreshToken = app.jwt.sign({ sub: user.id }, { expiresIn: '30d' });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { last_seen_at: new Date() },
+    });
+
+    const { accessToken, refreshToken } = await issueTokens(app, user.id);
 
     reply
       .setCookie('refreshToken', refreshToken, {
@@ -77,42 +117,80 @@ export async function authRoutes(app: FastifyInstance) {
             id: user.id,
             email: user.email,
             display_name: user.display_name,
-            onboarding_completed: user.onboarding_completed
-          }
-        }
+            onboarding_completed: user.onboarding_completed,
+          },
+        },
       });
   });
 
   app.post('/refresh', async (req, reply) => {
-    const refreshToken = req.cookies.refreshToken;
-    if (!refreshToken) {
+    const rawToken = req.cookies.refreshToken;
+    if (!rawToken) {
       return reply.status(401).send({ message: 'No refresh token' });
     }
 
+    let decoded: { sub: string; fid: string; jti: string };
     try {
-      const decoded = await app.jwt.verify(refreshToken) as { sub: string };
-      const accessToken = app.jwt.sign({ sub: decoded.sub });
-      
-      reply.send({
-        data: {
-          access_token: accessToken
-        }
-      });
-    } catch (err) {
+      decoded = (await app.jwt.verify(rawToken)) as any;
+    } catch {
       return reply.status(401).send({ message: 'Invalid refresh token' });
     }
+
+    const { sub: userId, fid, jti } = decoded;
+    if (!fid || !jti) {
+      return reply.status(401).send({ message: 'Invalid refresh token format' });
+    }
+
+    const storedJti = await redis.get(refreshFamilyKey(fid));
+
+    if (!storedJti) {
+      // Family already invalidated (logged out)
+      return reply.status(401).send({ message: 'Refresh token has been revoked' });
+    }
+
+    if (storedJti !== jti) {
+      // Reuse detected — invalidate entire family
+      await redis.del(refreshFamilyKey(fid));
+      return reply.status(401).send({ message: 'Refresh token reuse detected. Please log in again.' });
+    }
+
+    // Rotate: invalidate old jti, issue new token pair with same fid but new jti
+    const newJti = randomUUID();
+    const accessToken = app.jwt.sign({ sub: userId });
+    const refreshToken = app.jwt.sign({ sub: userId, fid, jti: newJti }, { expiresIn: '30d' });
+
+    await redis.setex(refreshFamilyKey(fid), REFRESH_TTL_SECONDS, newJti);
+
+    reply
+      .setCookie('refreshToken', refreshToken, {
+        httpOnly: true,
+        path: '/',
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+      })
+      .send({ data: { access_token: accessToken } });
   });
 
   app.post('/logout', async (req, reply) => {
-    reply
-      .clearCookie('refreshToken')
-      .send({ message: 'Logged out' });
+    const rawToken = req.cookies.refreshToken;
+    if (rawToken) {
+      try {
+        const decoded = (await app.jwt.verify(rawToken)) as any;
+        if (decoded?.fid) {
+          await redis.del(refreshFamilyKey(decoded.fid));
+        }
+      } catch {
+        // Token already invalid — still clear cookie
+      }
+    }
+
+    reply.clearCookie('refreshToken').send({ message: 'Logged out' });
   });
 
   app.get('/me', async (req, reply) => {
     await req.jwtVerify();
     const user = await prisma.user.findUnique({
-      where: { id: (req.user as any).sub }
+      where: { id: (req.user as any).sub },
     });
 
     if (!user) {
@@ -131,9 +209,9 @@ export async function authRoutes(app: FastifyInstance) {
         scoring_weights: {
           urgency: user.scoring_weight_urgency,
           priority: user.scoring_weight_priority,
-          duration: user.scoring_weight_duration
-        }
-      }
+          duration: user.scoring_weight_duration,
+        },
+      },
     });
   });
 }

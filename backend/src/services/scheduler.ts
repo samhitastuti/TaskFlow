@@ -8,6 +8,7 @@ export interface Task {
   priority_weight: number;
   category: Category;
   status: TaskStatus;
+  recurrence: Recurrence;
   dependencies: string[];
   skip_count: number;
   composite_score?: number | null;
