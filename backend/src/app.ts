@@ -28,11 +28,14 @@ export const buildApp = async () => {
   await app.register(cors);
   await app.register(helmet);
   await app.register(cookie);
-  await app.register(rateLimit, {
-    redis,
-    max: 100,
-    timeWindow: '1 minute',
-  });
+
+  if (process.env.NODE_ENV !== 'test') {
+    await app.register(rateLimit, {
+      redis,
+      max: 100,
+      timeWindow: '1 minute',
+    });
+  }
 
   // JWT setup
   // In production, these would be loaded from env or a vault
