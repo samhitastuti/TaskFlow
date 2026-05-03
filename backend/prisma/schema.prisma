@@ -21,6 +21,7 @@ model User {
   scoring_weight_urgency    Float    @default(0.4)
   scoring_weight_priority   Float    @default(0.4)
   scoring_weight_duration   Float    @default(0.2)
+  notification_preferences  Json?    @default("{}")
 
   tasks          Task[]
   sessions       Session[]
