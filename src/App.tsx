@@ -398,6 +398,7 @@ const StatsStrip = ({ stats }: { stats: any }) => {
 };
 
 const FocusNow = ({ task, onStart, onComplete }: { task?: Task, onStart: (task: Task) => void, onComplete: (id: number) => void }) => {
+  const settings = useTaskFlowStore(state => state.settings);
   if (!task) return (
     <div className="bg-deep-space border-2 border-dashed border-ceil/30 p-12 rounded-md mb-8 flex flex-col items-center justify-center text-center">
       <EmptyState />
@@ -425,7 +426,7 @@ const FocusNow = ({ task, onStart, onComplete }: { task?: Task, onStart: (task: 
           <span className="w-1 h-1 bg-ceil/30 rounded-full" />
           <span>Due {new Date(task.deadline).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
           <span className="w-1 h-1 bg-ceil/30 rounded-full" />
-          <span>Score {task.id ? (task.id / 100).toFixed(2) : '0.91'}</span>
+          <span>Score {getTaskScore(task, settings).toFixed(2)}</span>
         </div>
       </div>
 
@@ -504,7 +505,8 @@ interface BacklogItemDetailedProps {
 }
 
 const BacklogItemDetailed: React.FC<BacklogItemDetailedProps> = ({ task, onSchedule }) => {
-  const score = (task.id ? (task.id / 100) : 0.88).toFixed(2);
+  const settings = useTaskFlowStore(state => state.settings);
+  const score = getTaskScore(task, settings).toFixed(2);
   
   return (
     <div className="bg-chinese-blue/20 border border-chinese-blue px-6 py-3 rounded-md flex items-center gap-6 group hover:border-pearly-purple transition-colors shrink-0">
@@ -631,8 +633,8 @@ export default function App() {
     );
   };
 
-  // Base list of incomplete tasks
-  let unfilteredActive = scheduleTasks(allTasks, settings);
+  // Base list of incomplete tasks that are scheduled
+  let unfilteredActive = scheduleTasks(allTasks.filter(t => t.scheduled), settings);
   
   // Apply Sidebar Filters (Category)
   if (activeCategory) {
@@ -685,13 +687,14 @@ export default function App() {
     });
   };
 
-  const totalDurationMinutes = allTasks.filter(t => !t.completed).reduce((acc, t) => acc + t.duration, 0);
+  const scheduledIncomplete = allTasks.filter(t => !t.completed && t.scheduled);
+  const totalDurationMinutes = scheduledIncomplete.reduce((acc, t) => acc + t.duration, 0);
   const hoursRemaining = (totalDurationMinutes / 60).toFixed(1);
   const loadPercentage = Math.min(100, Math.round((totalDurationMinutes / 480) * 100)); // Assume 8h work day
 
   const stats = {
     completed: completedToday.length,
-    totalScheduled: allTasks.length,
+    totalScheduled: allTasks.filter(t => t.scheduled).length,
     hoursRemaining: hoursRemaining,
     overdue: overdueTasks.length,
     load: loadPercentage
@@ -805,7 +808,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <StatsStrip stats={settings} />
+                <StatsStrip stats={stats} />
                 <ConflictBanner />
                 
                 {activeTasks.length > 0 ? (

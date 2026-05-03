@@ -29,13 +29,15 @@ export const buildApp = async () => {
   await app.register(helmet);
   await app.register(cookie);
 
-  if (process.env.NODE_ENV !== 'test') {
+/*
+  if (process.env.NODE_ENV !== 'test' && !(redis as any).isMock) {
     await app.register(rateLimit, {
       redis,
       max: 100,
       timeWindow: '1 minute',
     });
   }
+*/
 
   // JWT setup
   // In production, these would be loaded from env or a vault
@@ -52,6 +54,11 @@ export const buildApp = async () => {
 
   // Custom Error Handler
   app.setErrorHandler(errorHandler);
+
+  // Root route
+  app.get('/', async () => {
+    return { status: 'ok', message: 'TaskFlow API is running', version: '1.0.0' };
+  });
 
   // Routes
   await app.register(authRoutes, { prefix: '/api/v1/auth' });
