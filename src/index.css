@@ -1,0 +1,77 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Lora:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Lora", serif;
+  --font-display: "Playfair Display", serif;
+
+  --color-chinese-blue: #414B9E;
+  --color-ceil: #9792CB;
+  --color-pearly-purple: #AA74A0;
+  --color-desert-sand: #E2C99E;
+  --color-antique-ruby: #852736;
+  --color-deep-space: #1e2147;
+
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 6px;
+}
+
+@layer base {
+  body {
+    @apply bg-chinese-blue text-desert-sand font-serif antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display font-bold;
+  }
+
+  /* Custom Focus Rings */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-desert-sand ring-offset-2 ring-offset-chinese-blue;
+  }
+}
+
+@layer components {
+  .card-surface {
+    @apply bg-deep-space border border-chinese-blue rounded-md;
+  }
+
+  .btn-primary {
+    @apply bg-antique-ruby text-desert-sand font-bold rounded-md hover:scale-[1.02] active:scale-[0.98] transition-all;
+  }
+
+  .btn-ghost {
+    @apply border border-ceil text-ceil hover:bg-ceil/5 rounded-md transition-colors;
+  }
+}
+
+/* Animations from user request */
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 0px rgba(170, 116, 160, 0); }
+  50% { box-shadow: 0 0 15px rgba(170, 116, 160, 0.4); }
+}
+
+.animate-glow-pulse {
+  animation: glow-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes checkmark-pulse {
+  0% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.5); opacity: 1; color: #AA74A0; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+.animate-checkmark-pulse {
+  animation: checkmark-pulse 0.4s ease-out forwards;
+}
+
+@keyframes antique-ruby-glow {
+  0%, 100% { border-color: rgba(133, 39, 54, 0.4); }
+  50% { border-color: #852736; }
+}
+
+.animate-ruby-glow {
+  animation: antique-ruby-glow 2s infinite;
+}
